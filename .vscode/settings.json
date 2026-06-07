@@ -3,6 +3,10 @@
         "/^python3 -m py_compile plot_locations\\.py$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^python plot_locations\\.py$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

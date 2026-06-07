@@ -58,7 +58,7 @@ def filterNonUKLocations(locations):
     ]
 
 
-locationsWithDistictLabels=['108', '46', '109', '53', '16', '48', '54', '45', '113', '71', '128', '130', '34', '112', '129', '37', '33', '38', '35', '1', '107', '147', '19', '150', '89', '148', '67', '75', '39']
+locationsWithDistictLabels=['108', '46', '109', '53', '16', '48', '54', '45', '113', '71', '128', '130', '34', '112', '129', '37', '33', '38', '35', '1', '107', '147', '19', '150', '89', '67', '75', '39', '32', '26']
 
 def assign_labels_custom(locations, extent):
     
@@ -108,11 +108,11 @@ def assign_labels_custom(locations, extent):
     locationsWithoutExtremes = [loc for loc in locationsWithoutExtremes if loc not in leftMost]
     print(f"leftMost: {len(leftMost)} locationsWithoutExtremes: {len(locationsWithoutExtremes)}")
     
-    topMost = sorted(locationsWithoutExtremes, key=lambda l: l['lat'], reverse=True)[:15]
+    topMost = sorted(locationsWithoutExtremes, key=lambda l: l['lat'], reverse=True)[:25]
     locationsWithoutExtremes = [loc for loc in locationsWithoutExtremes if loc not in topMost]
     print(f"topMost: {len(topMost)} locationsWithoutExtremes: {len(locationsWithoutExtremes)}")
     
-    bottomMost = sorted(locationsWithoutExtremes, key=lambda l: l['lat'])[:15]
+    bottomMost = sorted(locationsWithoutExtremes, key=lambda l: l['lat'])[:28]
     locationsWithoutExtremes = [loc for loc in locationsWithoutExtremes if loc not in bottomMost]
     print(f"bottomMost: {len(bottomMost)} locationsWithoutExtremes: {len(locationsWithoutExtremes)}")
     
@@ -144,6 +144,7 @@ def assign_labels_custom(locations, extent):
     groups['top'].extend(veryTopMost)
     groups['bottom'].extend(bottomMost)
     groups['distinct'].extend(distinctLocations)
+    groups['isolated'] = []  # New group for isolated clusters
             
     print(f"right: {len(groups['right'])}")
     print(f"left: {len(groups['left'])}")
@@ -152,7 +153,7 @@ def assign_labels_custom(locations, extent):
     print(f"distinct: {len(groups['distinct'])}")
 
     cluster_id = 1
-    def sort_by_coordinate_then_index(locations, coord_key, tolerance=0.01, reverse=True):
+    def sort_by_coordinate_then_index(locations, coord_key, tolerance=0.02, reverse=True):
         nonlocal cluster_id
         sorted_by_coord = sorted(locations, key=lambda loc: loc[coord_key])
         clusters = []
@@ -195,11 +196,68 @@ def assign_labels_custom(locations, extent):
         if reverse:
             result.reverse()
         return result
+    
+    distinctClustersByLabel = {}
 
-    groups['right'] = sort_by_coordinate_then_index(groups['right'], 'lon')
-    groups['left'] = sort_by_coordinate_then_index(groups['left'], 'lon', 0.02, False)
+    groups['right'] = sort_by_coordinate_then_index(groups['right'], 'lon', 0.03)
+    groups['left'] = sort_by_coordinate_then_index(groups['left'], 'lon', 0.03)
     groups['top'] = sort_by_coordinate_then_index(groups['top'], 'lat', 0.02, False)
     groups['bottom'] = sort_by_coordinate_then_index(groups['bottom'], 'lat', 0.02, False)
+    
+    # Identify and move isolated clusters
+    def extract_isolated_clusters(groups, isolation_threshold=0.5):
+        """Extract clusters that are isolated from other clusters/locations"""
+        all_locs = groups['right'] + groups['left'] + groups['top'] + groups['bottom']
+        
+        # Build a map of cluster IDs to their locations
+        cluster_map = {}
+        for loc in all_locs:
+            cluster_id = loc.get('cluster_id')
+            if cluster_id is not None:
+                if cluster_id not in cluster_map:
+                    cluster_map[cluster_id] = []
+                cluster_map[cluster_id].append(loc)
+        
+        # Calculate centroid for each cluster
+        def get_centroid(locs):
+            lat_avg = np.mean([loc['lat'] for loc in locs])
+            lon_avg = np.mean([loc['lon'] for loc in locs])
+            return lat_avg, lon_avg
+        
+        # Calculate great-circle distance in degrees (approximate)
+        def distance_degrees(lat1, lon1, lat2, lon2):
+            return np.sqrt((lat2 - lat1)**2 + (lon2 - lon1)**2)
+        
+        # Identify isolated clusters
+        isolated_cluster_ids = set()
+        for cluster_id, cluster_locs in cluster_map.items():
+            centroid_lat, centroid_lon = get_centroid(cluster_locs)
+            
+            # Find nearest neighbor (any other location or cluster)
+            min_distance = float('inf')
+            for loc in all_locs:
+                if loc.get('cluster_id') != cluster_id:
+                    dist = distance_degrees(centroid_lat, centroid_lon, loc['lat'], loc['lon'])
+                    min_distance = min(min_distance, dist)
+            
+            # If no nearby neighbors, mark as isolated
+            if min_distance > isolation_threshold:
+                isolated_cluster_ids.add(cluster_id)
+        
+        # Move isolated clusters to isolated group
+        for edge in ['right', 'left', 'top', 'bottom']:
+            isolated_locs = [loc for loc in groups[edge] 
+                           if loc.get('cluster_id') in isolated_cluster_ids]
+            groups[edge] = [loc for loc in groups[edge] 
+                          if loc.get('cluster_id') not in isolated_cluster_ids]
+            groups['isolated'].extend(isolated_locs)
+        
+        print(f"Isolated clusters: {len(isolated_cluster_ids)}")
+    
+    extract_isolated_clusters(groups, isolation_threshold=1)
+    
+    print(groups)
+    
     return groups
     
     """
@@ -247,23 +305,23 @@ def plot_uk_map(locations, output_path, dpi=300):
 
     # Key UK cities (lat, lon)
     cities = {
-        'London': (51.5074, -0.1278),
-        'Birmingham': (52.4862, -1.8904),
-        'Cardiff': (51.4816, -3.1791),
-        'Bristol': (51.4545, -2.5879),
-        'Exeter': (50.7260, -3.5275),
-        'Cambridge': (52.1951, 0.1313),
-        'Taunton': (51.0153, -3.1068),
-        'Plymouth': (50.3755, -4.1427),
-        'Portsmouth': (50.8198, -1.0880),
-        'Oxford': (51.7520, -1.2577),
-        'Aberystwyth': (52.4153, -4.0829),
-        'Mablethorpe': (53.3409, 0.2611)
+        'London': (51.5074, -0.1278, -0.05),
+        'Birmingham': (52.4862, -1.8904, 0.025),
+        'Cardiff': (51.4816, -3.1791, -0.05),
+        'Bristol': (51.4545, -2.5879, 0),
+        'Exeter': (50.7260, -3.5275, 0),
+        'Cambridge': (52.1951, 0.1313, -0.05),
+        'Taunton': (51.0153, -3.1068, -0.05),
+        'Plymouth': (50.3755, -4.1427, -0.025),
+        'Portsmouth': (50.8198, -1.0880, 0),
+        'Oxford': (51.7520, -1.2577, -0.05),
+        'Aberystwyth': (52.4153, -4.0829, -0.05),
+        'Mablethorpe': (53.3409, 0.2611, -0.05)
     }
-    for city, (lat, lon) in cities.items():
-        ax.plot(lon, lat, 's', color='black', markersize=3, transform=ccrs.PlateCarree())
+    for city, (lat, lon, labelLat) in cities.items():
+        ax.plot(lon, lat, 's', color='red', markersize=3, transform=ccrs.PlateCarree())
         ax.text(
-            lon+0.075, lat, city, fontsize=10, color='#333333', transform=ccrs.PlateCarree(),
+            lon+0.075, lat+labelLat, city, fontsize=10, color='#544C4A', transform=ccrs.PlateCarree(),
             bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.1', alpha=0.75),
             zorder=4
         )
@@ -305,6 +363,18 @@ def plot_uk_map(locations, output_path, dpi=300):
             lx, ly, label,
             fontsize=10, color='#544C4A', weight='bold',
             ha='center', va='center', zorder=3,
+            bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.1', alpha=0.75),
+            transform=ccrs.PlateCarree()
+        )
+
+    # Draw isolated cluster labels directly on the map
+    for loc in edge_labels['isolated']:
+        ax.plot(loc['lon'], loc['lat'], 'bo', markersize=3, transform=ccrs.PlateCarree())
+        label = loc.get('cluster_label', str(loc['index']))
+        ax.text(
+            loc['lon'] + 0.02, loc['lat'] + 0.02, label,
+            fontsize=10, color='#544C4A', weight='bold',
+            ha='left', va='bottom', zorder=3,
             bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.1', alpha=0.75),
             transform=ccrs.PlateCarree()
         )
